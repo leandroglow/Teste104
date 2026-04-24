@@ -25,12 +25,14 @@
       top: 14px;
       left: 14px;
       z-index: 10;
-      background: rgba(255,255,255,0.92);
+      background: rgba(255,255,255,0.94);
       padding: 10px 14px;
       border-radius: 8px;
       font-size: 14px;
       color: #222;
       box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+      max-width: 520px;
+      line-height: 1.45;
     }
 
     #botoes {
@@ -61,7 +63,7 @@
 </head>
 
 <body>
-  <div id="status">Carregando modelo...</div>
+  <div id="status">Iniciando visualizador...</div>
 
   <div id="botoes">
     <button onclick="centralizarCamera()">Centralizar</button>
@@ -93,15 +95,53 @@
     const status = document.getElementById("status");
 
     let scene, camera, renderer, controls;
-    let modelo = null;
     let grupoArestas = null;
     let piso = null;
     let arestasVisiveis = true;
     let pisoVisivel = true;
     let distanciaCamera = 10;
 
+    function escreverStatus(texto) {
+      status.innerHTML = texto;
+    }
+
     iniciarCena();
-    carregarModelo();
+    verificarArquivosECarregar();
+
+    async function verificarExisteArquivo(nome) {
+      try {
+        const resposta = await fetch(nome, { method: "HEAD", cache: "no-store" });
+        return resposta.ok;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    async function verificarArquivosECarregar() {
+      escreverStatus("Verificando arquivos no GitHub Pages...");
+
+      const objExiste = await verificarExisteArquivo(ARQUIVO_OBJ);
+      const mtlExiste = await verificarExisteArquivo(ARQUIVO_MTL);
+
+      if (!objExiste) {
+        escreverStatus(
+          "Erro: não encontrei <b>modelo.obj</b> na mesma pasta do index.html.<br>" +
+          "Confira se o nome está exatamente <b>modelo.obj</b>, tudo minúsculo."
+        );
+        return;
+      }
+
+      if (!mtlExiste) {
+        escreverStatus(
+          "Encontrei o OBJ, mas não encontrei <b>modelo.mtl</b>.<br>" +
+          "Vou tentar carregar sem cores completas..."
+        );
+        carregarOBJ(null);
+        return;
+      }
+
+      carregarModeloComMTL();
+    }
 
     function iniciarCena() {
       scene = new THREE.Scene();
@@ -144,12 +184,6 @@
       luzPrincipal.castShadow = true;
       luzPrincipal.shadow.mapSize.width = 2048;
       luzPrincipal.shadow.mapSize.height = 2048;
-      luzPrincipal.shadow.camera.near = 0.5;
-      luzPrincipal.shadow.camera.far = 500;
-      luzPrincipal.shadow.camera.left = -100;
-      luzPrincipal.shadow.camera.right = 100;
-      luzPrincipal.shadow.camera.top = 100;
-      luzPrincipal.shadow.camera.bottom = -100;
       scene.add(luzPrincipal);
 
       const luzSecundaria = new THREE.DirectionalLight(0xffffff, 0.45);
@@ -162,7 +196,6 @@
       );
       piso.rotation.x = -Math.PI / 2;
       piso.receiveShadow = true;
-      piso.visible = pisoVisivel;
       scene.add(piso);
 
       window.addEventListener("resize", ajustarTela);
@@ -209,10 +242,6 @@
             mat.map.needsUpdate = true;
           }
 
-          if (mat.color) {
-            mat.color.convertSRGBToLinear();
-          }
-
           mat.needsUpdate = true;
         });
       });
@@ -239,7 +268,7 @@
       centralizarCamera();
     }
 
-    window.centralizarCamera = function () {
+    function centralizarCamera() {
       camera.position.set(
         distanciaCamera * 0.95,
         distanciaCamera * 0.75,
@@ -249,7 +278,7 @@
       camera.lookAt(0, 0, 0);
       controls.target.set(0, 0, 0);
       controls.update();
-    };
+    }
 
     function criarArestas(objeto) {
       if (grupoArestas) {
@@ -281,15 +310,19 @@
       scene.add(grupoArestas);
     }
 
-    window.alternarArestas = function () {
+    function alternarArestas() {
       arestasVisiveis = !arestasVisiveis;
       if (grupoArestas) grupoArestas.visible = arestasVisiveis;
-    };
+    }
 
-    window.alternarPiso = function () {
+    function alternarPiso() {
       pisoVisivel = !pisoVisivel;
       if (piso) piso.visible = pisoVisivel;
-    };
+    }
+
+    window.centralizarCamera = centralizarCamera;
+    window.alternarArestas = alternarArestas;
+    window.alternarPiso = alternarPiso;
 
     function carregarOBJ(materiais = null) {
       const objLoader = new OBJLoader();
@@ -303,28 +336,41 @@
       objLoader.load(
         ARQUIVO_OBJ,
         function (objeto) {
-          modelo = objeto;
-          prepararMateriais(modelo);
-          scene.add(modelo);
-          centralizarModelo(modelo);
-          criarArestas(modelo);
-          status.textContent = "Modelo carregado com cores";
+          prepararMateriais(objeto);
+          scene.add(objeto);
+          centralizarModelo(objeto);
+          criarArestas(objeto);
+          escreverStatus("Modelo carregado com sucesso.");
         },
         function (xhr) {
           if (xhr.lengthComputable) {
             const p = Math.round((xhr.loaded / xhr.total) * 100);
-            status.textContent = "Carregando OBJ... " + p + "%";
+            escreverStatus("Carregando OBJ... " + p + "%");
+          } else {
+            escreverStatus("Carregando OBJ...");
           }
         },
         function (erro) {
           console.error("Erro OBJ:", erro);
-          status.textContent = "Erro ao carregar modelo.obj";
+          escreverStatus(
+            "Erro ao carregar <b>modelo.obj</b>.<br>" +
+            "Abra o console com F12 para ver o erro técnico."
+          );
         }
       );
     }
 
-    function carregarModelo() {
-      const mtlLoader = new MTLLoader();
+    function carregarModeloComMTL() {
+      escreverStatus("Carregando materiais MTL...");
+
+      const manager = new THREE.LoadingManager();
+
+      manager.setURLModifier((url) => {
+        // Ajuda caso o MTL tenha caminhos com barra invertida do Windows.
+        return url.replace(/\\/g, "/");
+      });
+
+      const mtlLoader = new MTLLoader(manager);
       mtlLoader.setPath("./");
       mtlLoader.setTexturePath("./");
       mtlLoader.setResourcePath("./");
@@ -333,13 +379,16 @@
         ARQUIVO_MTL,
         function (materiais) {
           materiais.preload();
-          status.textContent = "Materiais carregados. Carregando OBJ...";
+          escreverStatus("Materiais carregados. Carregando OBJ...");
           carregarOBJ(materiais);
         },
         undefined,
         function (erro) {
-          console.warn("Erro MTL ou MTL não encontrado:", erro);
-          status.textContent = "MTL não encontrado. Carregando OBJ sem cores completas...";
+          console.warn("Erro MTL:", erro);
+          escreverStatus(
+            "Não consegui carregar <b>modelo.mtl</b>.<br>" +
+            "Vou tentar abrir apenas o OBJ, mas pode ficar sem cores."
+          );
           carregarOBJ(null);
         }
       );
