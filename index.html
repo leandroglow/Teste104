@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Visualizador OBJ Técnico</title>
+
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #d0d0d0;
+      color: #222;
+    }
+
+    header {
+      background: #222;
+      color: white;
+      padding: 14px 22px;
+    }
+
+    main {
+      padding: 14px;
+    }
+
+    .painel {
+      background: white;
+      padding: 14px;
+      border-radius: 10px;
+      margin-bottom: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.16);
+    }
+
+    #viewer {
+      width: 100%;
+      height: 78vh;
+      background: #bfc0c0;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    input {
+      margin: 5px 0 10px 0;
+      display: block;
+    }
+
+    button {
+      padding: 9px 13px;
+      border: 0;
+      border-radius: 8px;
+      background: #222;
+      color: white;
+      cursor: pointer;
+      margin: 4px 5px 4px 0;
+    }
+
+    button:hover {
+      background: #444;
+    }
+
+    .ok {
+      color: #087a2f;
+      font-weight: bold;
+    }
+
+    .erro {
+      color: #b00020;
+      font-weight: bold;
+    }
+
+    .aviso {
+      color: #8a5a00;
+      font-weight: bold;
+    }
+
+    code {
+      background: #eee;
+      padding: 2px 5px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h2>Visualizador OBJ Técnico com Cores, Sombras e Arestas</h2>
+  </header>
+
+  <main>
+    <div class="painel">
+      <p>
+        Selecione o <code>.obj</code>. Para manter as cores originais, selecione também o <code>.mtl</code>
+        e as texturas/imagens, se existirem.
+      </p>
+
+      <label>Arquivo OBJ:</label>
+      <input type="file" id="objFile" accept=".obj" />
+
+      <label>Arquivo MTL:</label>
+      <input type="file" id="mtlFile" accept=".mtl" />
+
+      <label>Texturas/imagens:</label>
+      <input type="file" id="textureFiles" multiple accept=".jpg,.jpeg,.png,.webp,.bmp,.gif,.tga" />
+
+      <button onclick="carregarModelo()">Carregar modelo</button>
+      <button onclick="resetarCamera()">Centralizar câmera</button>
+      <button onclick="alternarArestas()">Mostrar/ocultar arestas</button>
+      <button onclick="alternarPiso()">Mostrar/ocultar sombra do piso</button>
+      <button onclick="alternarCamera()">Alternar câmera</button>
+
+      <p id="status">Aguardando arquivo...</p>
+    </div>
+
+    <div id="viewer"></div>
+  </main>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
+    import { MTLLoader } from "three/addons/loaders/MTLLoader.js";
+
+    let scene, camera, cameraPersp, cameraOrtho, renderer, controls;
+    let modeloAtual = null;
+    let grupoArestas = null;
+    let piso = null;
+    let ultimaDistanciaCamera = 10;
+    let arestasVisiveis = true;
+    let pisoVisivel = true;
+    let usandoOrtho = true;
+
+    const container = document.getElementById("viewer");
+    const statusText = document.getElementById("status");
+
+    iniciarCena();
+
+    function setStatus(texto, tipo = "") {
+      if (tipo) {
+        statusText.innerHTML = `<span class="${tipo}">${texto}</span>`;
+      } else {
+        statusText.textContent = texto;
+      }
+    }
+
+    function iniciarCena() {
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xbfc0c0);
+
+      const aspect = container.clientWidth / container.clientHeight;
+
+      cameraPersp = new THREE.PerspectiveCamera(35, aspect, 0.1, 100000);
+
+      const frustumSize = 10;
+      cameraOrtho = new THREE.OrthographicCamera(
+        frustumSize * aspect / -2,
+        frustumSize * aspect / 2,
+        frustumSize / 2,
+        frustumSize / -2,
+        0.1,
+        100000
+      );
+
+      camera = cameraOrtho;
+      camera.position.set(8, 6, 8);
+      camera.lookAt(0, 0, 0);
+
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        preserveDrawingBuffer: true
+      });
+
+      renderer.setSize(container.clientWidth, container.clientHeight);
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.08;
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+      container.appendChild(renderer.domElement);
+
+      controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+      controls.screenSpacePanning = true;
+
+      // Iluminação mais parecida com visualizador técnico
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x777777, 1.2));
+      scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+
+      const luzPrincipal = new THREE.DirectionalLight(0xffffff, 2.1);
+      luzPrincipal.position.set(10, 18, 10);
+      luzPrincipal.castShadow = true;
+      luzPrincipal.shadow.mapSize.width = 2048;
+      luzPrincipal.shadow.mapSize.height = 2048;
+      luzPrincipal.shadow.camera.near = 0.5;
+      luzPrincipal.shadow.camera.far = 500;
+      luzPrincipal.shadow.camera.left = -80;
+      luzPrincipal.shadow.camera.right = 80;
+      luzPrincipal.shadow.camera.top = 80;
+      luzPrincipal.shadow.camera.bottom = -80;
+      scene.add(luzPrincipal);
+
+      const luzSuave = new THREE.DirectionalLight(0xffffff, 0.45);
+      luzSuave.position.set(-8, 7, -10);
+      scene.add(luzSuave);
+
+      piso = new THREE.Mesh(
+        new THREE.PlaneGeometry(10000, 10000),
+        new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.18 })
+      );
+      piso.rotation.x = -Math.PI / 2;
+      piso.position.y = -0.01;
+      piso.receiveShadow = true;
+      piso.visible = pisoVisivel;
+      scene.add(piso);
+
+      window.addEventListener("resize", ajustarTela);
+      animar();
+    }
+
+    function ajustarTela() {
+      const aspect = container.clientWidth / container.clientHeight;
+
+      cameraPersp.aspect = aspect;
+      cameraPersp.updateProjectionMatrix();
+
+      const frustumSize = ultimaDistanciaCamera * 1.6;
+      cameraOrtho.left = frustumSize * aspect / -2;
+      cameraOrtho.right = frustumSize * aspect / 2;
+      cameraOrtho.top = frustumSize / 2;
+      cameraOrtho.bottom = frustumSize / -2;
+      cameraOrtho.updateProjectionMatrix();
+
+      renderer.setSize(container.clientWidth, container.clientHeight);
+    }
+
+    function animar() {
+      requestAnimationFrame(animar);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    function criarURLArquivos(files) {
+      const urls = {};
+      for (const file of files) {
+        const url = URL.createObjectURL(file);
+        urls[file.name] = url;
+        urls[file.name.toLowerCase()] = url;
+      }
+      return urls;
+    }
+
+    async function carregarTextoArquivo(file) {
+      return await file.text();
+    }
+
+    function converterMaterialParaStandard(mat) {
+      // Mantém mapa/textura, cor, transparência e brilho de forma mais moderna.
+      const novo = new THREE.MeshStandardMaterial({
+        color: mat.color ? mat.color.clone() : new THREE.Color(0xcccccc),
+        map: mat.map || null,
+        transparent: mat.transparent || mat.opacity < 1,
+        opacity: mat.opacity !== undefined ? mat.opacity : 1,
+        roughness: 0.55,
+        metalness: 0.05,
+        side: THREE.DoubleSide
+      });
+
+      if (novo.map) {
+        novo.map.colorSpace = THREE.SRGBColorSpace;
+        novo.map.needsUpdate = true;
+      }
+
+      return novo;
+    }
+
+    function aplicarMateriaisEAparencia(objeto) {
+      objeto.traverse((child) => {
+        if (!child.isMesh) return;
+
+        child.castShadow = true;
+        child.receiveShadow = true;
+
+        const temCorPorVertice = child.geometry && child.geometry.attributes && child.geometry.attributes.color;
+
+        if (!child.material) {
+          child.material = new THREE.MeshStandardMaterial({
+            color: 0xcccccc,
+            roughness: 0.55,
+            metalness: 0.05,
+            side: THREE.DoubleSide,
+            vertexColors: !!temCorPorVertice
+          });
+        }
+
+        if (Array.isArray(child.material)) {
+          child.material = child.material.map((mat) => {
+            if (!mat) return mat;
+            const novo = converterMaterialParaStandard(mat);
+            novo.vertexColors = !!temCorPorVertice;
+            return novo;
+          });
+        } else {
+          child.material = converterMaterialParaStandard(child.material);
+          child.material.vertexColors = !!temCorPorVertice;
+        }
+      });
+    }
+
+    function criarArestas(objeto) {
+      if (grupoArestas) {
+        scene.remove(grupoArestas);
+        grupoArestas = null;
+      }
+
+      grupoArestas = new THREE.Group();
+
+      objeto.traverse((child) => {
+        if (!child.isMesh) return;
+
+        const edges = new THREE.EdgesGeometry(child.geometry, 35);
+        const materialEdges = new THREE.LineBasicMaterial({
+          color: 0x222222,
+          transparent: true,
+          opacity: 0.42
+        });
+
+        const linhas = new THREE.LineSegments(edges, materialEdges);
+
+        child.updateWorldMatrix(true, false);
+        linhas.applyMatrix4(child.matrixWorld);
+        grupoArestas.add(linhas);
+      });
+
+      grupoArestas.visible = arestasVisiveis;
+      scene.add(grupoArestas);
+    }
+
+    function centralizarModelo(objeto) {
+      const caixa = new THREE.Box3().setFromObject(objeto);
+      const centro = caixa.getCenter(new THREE.Vector3());
+      const tamanho = caixa.getSize(new THREE.Vector3());
+
+      objeto.position.x -= centro.x;
+      objeto.position.y -= centro.y;
+      objeto.position.z -= centro.z;
+
+      const caixa2 = new THREE.Box3().setFromObject(objeto);
+      const minY = caixa2.min.y;
+
+      // Coloca o piso ligeiramente abaixo do modelo.
+      if (piso) {
+        piso.position.y = minY - 0.02;
+      }
+
+      const maiorMedida = Math.max(tamanho.x, tamanho.y, tamanho.z);
+
+      if (maiorMedida > 0) {
+        ultimaDistanciaCamera = maiorMedida * 1.65;
+        resetarCamera();
+        ajustarTela();
+      }
+    }
+
+    window.resetarCamera = function () {
+      const d = ultimaDistanciaCamera;
+
+      camera.position.set(d * 0.9, d * 0.65, d * 0.9);
+      camera.lookAt(0, 0, 0);
+
+      controls.target.set(0, 0, 0);
+      controls.update();
+    };
+
+    window.alternarArestas = function () {
+      arestasVisiveis = !arestasVisiveis;
+      if (grupoArestas) grupoArestas.visible = arestasVisiveis;
+    };
+
+    window.alternarPiso = function () {
+      pisoVisivel = !pisoVisivel;
+      if (piso) piso.visible = pisoVisivel;
+    };
+
+    window.alternarCamera = function () {
+      usandoOrtho = !usandoOrtho;
+
+      const posicao = camera.position.clone();
+      const alvo = controls.target.clone();
+
+      camera = usandoOrtho ? cameraOrtho : cameraPersp;
+      camera.position.copy(posicao);
+      camera.lookAt(alvo);
+
+      controls.object = camera;
+      controls.target.copy(alvo);
+      controls.update();
+
+      ajustarTela();
+    };
+
+    window.carregarModelo = async function () {
+      const objInput = document.getElementById("objFile");
+      const mtlInput = document.getElementById("mtlFile");
+      const textureInput = document.getElementById("textureFiles");
+
+      const objFile = objInput.files[0];
+      const mtlFile = mtlInput.files[0];
+      const textureFiles = textureInput.files;
+
+      if (!objFile) {
+        setStatus("Selecione um arquivo .obj.", "erro");
+        return;
+      }
+
+      try {
+        setStatus("Carregando modelo...");
+
+        if (modeloAtual) {
+          scene.remove(modeloAtual);
+          modeloAtual = null;
+        }
+
+        if (grupoArestas) {
+          scene.remove(grupoArestas);
+          grupoArestas = null;
+        }
+
+        const textureURLs = criarURLArquivos(textureFiles);
+        const manager = new THREE.LoadingManager();
+
+        manager.setURLModifier((url) => {
+          const nomeArquivo = decodeURIComponent(url.split("/").pop());
+          const nomeLimpo = nomeArquivo.replace(/^.*[\\\/]/, "");
+
+          if (textureURLs[nomeLimpo]) return textureURLs[nomeLimpo];
+          if (textureURLs[nomeLimpo.toLowerCase()]) return textureURLs[nomeLimpo.toLowerCase()];
+
+          return url;
+        });
+
+        const objTexto = await carregarTextoArquivo(objFile);
+        const objLoader = new OBJLoader(manager);
+
+        if (mtlFile) {
+          const mtlTexto = await carregarTextoArquivo(mtlFile);
+          const mtlLoader = new MTLLoader(manager);
+
+          mtlLoader.setTexturePath("");
+          mtlLoader.setResourcePath("");
+
+          const materiais = mtlLoader.parse(mtlTexto, "");
+          materiais.preload();
+
+          objLoader.setMaterials(materiais);
+        }
+
+        const objeto = objLoader.parse(objTexto);
+
+        aplicarMateriaisEAparencia(objeto);
+
+        modeloAtual = objeto;
+        scene.add(modeloAtual);
+
+        centralizarModelo(modeloAtual);
+        criarArestas(modeloAtual);
+
+        if (mtlFile) {
+          setStatus("Modelo carregado com visual técnico, cores, iluminação, sombras e arestas.", "ok");
+        } else {
+          setStatus("Modelo carregado. Sem MTL, algumas cores podem não aparecer.", "aviso");
+        }
+      } catch (erro) {
+        console.error(erro);
+        setStatus("Erro ao carregar. Confira se o OBJ, o MTL e as texturas pertencem ao mesmo modelo.", "erro");
+      }
+    };
+  </script>
+</body>
+</html>
