@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Visualizador 3D</title>
+
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: Arial, sans-serif;
+      background: #bfc0c0;
+    }
+
+    #viewer {
+      width: 100vw;
+      height: 100vh;
+    }
+
+    #status {
+      position: fixed;
+      top: 14px;
+      left: 14px;
+      z-index: 10;
+      background: rgba(255,255,255,0.92);
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 14px;
+      color: #222;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+    }
+
+    #botoes {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      z-index: 10;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 9px 12px;
+      background: rgba(34,34,34,0.9);
+      color: white;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    button:hover {
+      background: rgba(60,60,60,0.95);
+    }
+  </style>
+</head>
+
+<body>
+  <div id="status">Carregando modelo...</div>
+
+  <div id="botoes">
+    <button onclick="centralizarCamera()">Centralizar</button>
+    <button onclick="alternarArestas()">Arestas</button>
+    <button onclick="alternarPiso()">Sombra</button>
+  </div>
+
+  <div id="viewer"></div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
+    import { MTLLoader } from "three/addons/loaders/MTLLoader.js";
+
+    const ARQUIVO_OBJ = "modelo.obj";
+    const ARQUIVO_MTL = "modelo.mtl";
+
+    const container = document.getElementById("viewer");
+    const status = document.getElementById("status");
+
+    let scene, camera, renderer, controls;
+    let modelo = null;
+    let grupoArestas = null;
+    let piso = null;
+    let arestasVisiveis = true;
+    let pisoVisivel = true;
+    let distanciaCamera = 10;
+
+    iniciarCena();
+    carregarModelo();
+
+    function iniciarCena() {
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xbfc0c0);
+
+      camera = new THREE.PerspectiveCamera(
+        35,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        100000
+      );
+
+      camera.position.set(10, 8, 10);
+
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        preserveDrawingBuffer: true
+      });
+
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.05;
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+      container.appendChild(renderer.domElement);
+
+      controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+      controls.screenSpacePanning = true;
+
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x777777, 1.25));
+      scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+
+      const luzPrincipal = new THREE.DirectionalLight(0xffffff, 2.0);
+      luzPrincipal.position.set(12, 20, 10);
+      luzPrincipal.castShadow = true;
+      luzPrincipal.shadow.mapSize.width = 2048;
+      luzPrincipal.shadow.mapSize.height = 2048;
+      luzPrincipal.shadow.camera.near = 0.5;
+      luzPrincipal.shadow.camera.far = 500;
+      luzPrincipal.shadow.camera.left = -100;
+      luzPrincipal.shadow.camera.right = 100;
+      luzPrincipal.shadow.camera.top = 100;
+      luzPrincipal.shadow.camera.bottom = -100;
+      scene.add(luzPrincipal);
+
+      const luzSecundaria = new THREE.DirectionalLight(0xffffff, 0.45);
+      luzSecundaria.position.set(-8, 8, -10);
+      scene.add(luzSecundaria);
+
+      piso = new THREE.Mesh(
+        new THREE.PlaneGeometry(10000, 10000),
+        new THREE.ShadowMaterial({ opacity: 0.18 })
+      );
+      piso.rotation.x = -Math.PI / 2;
+      piso.receiveShadow = true;
+      piso.visible = pisoVisivel;
+      scene.add(piso);
+
+      window.addEventListener("resize", ajustarTela);
+      animar();
+    }
+
+    function ajustarTela() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function animar() {
+      requestAnimationFrame(animar);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    function prepararMateriais(objeto) {
+      objeto.traverse((child) => {
+        if (!child.isMesh) return;
+
+        child.castShadow = true;
+        child.receiveShadow = true;
+
+        if (!child.material) {
+          child.material = new THREE.MeshStandardMaterial({
+            color: 0xcccccc,
+            roughness: 0.6,
+            metalness: 0.05,
+            side: THREE.DoubleSide
+          });
+        }
+
+        const materiais = Array.isArray(child.material) ? child.material : [child.material];
+
+        materiais.forEach((mat) => {
+          if (!mat) return;
+
+          mat.side = THREE.DoubleSide;
+
+          if (mat.map) {
+            mat.map.colorSpace = THREE.SRGBColorSpace;
+            mat.map.needsUpdate = true;
+          }
+
+          if (mat.color) {
+            mat.color.convertSRGBToLinear();
+          }
+
+          mat.needsUpdate = true;
+        });
+      });
+    }
+
+    function centralizarModelo(objeto) {
+      const caixa = new THREE.Box3().setFromObject(objeto);
+      const centro = caixa.getCenter(new THREE.Vector3());
+      const tamanho = caixa.getSize(new THREE.Vector3());
+
+      objeto.position.x -= centro.x;
+      objeto.position.y -= centro.y;
+      objeto.position.z -= centro.z;
+
+      const caixaDepois = new THREE.Box3().setFromObject(objeto);
+
+      if (piso) {
+        piso.position.y = caixaDepois.min.y - 0.03;
+      }
+
+      const maior = Math.max(tamanho.x, tamanho.y, tamanho.z);
+      distanciaCamera = maior > 0 ? maior * 1.7 : 10;
+
+      centralizarCamera();
+    }
+
+    window.centralizarCamera = function () {
+      camera.position.set(
+        distanciaCamera * 0.95,
+        distanciaCamera * 0.75,
+        distanciaCamera * 0.95
+      );
+
+      camera.lookAt(0, 0, 0);
+      controls.target.set(0, 0, 0);
+      controls.update();
+    };
+
+    function criarArestas(objeto) {
+      if (grupoArestas) {
+        scene.remove(grupoArestas);
+        grupoArestas = null;
+      }
+
+      grupoArestas = new THREE.Group();
+
+      objeto.traverse((child) => {
+        if (!child.isMesh) return;
+
+        const edges = new THREE.EdgesGeometry(child.geometry, 35);
+        const materialEdges = new THREE.LineBasicMaterial({
+          color: 0x222222,
+          transparent: true,
+          opacity: 0.35
+        });
+
+        const linhas = new THREE.LineSegments(edges, materialEdges);
+
+        child.updateWorldMatrix(true, false);
+        linhas.applyMatrix4(child.matrixWorld);
+
+        grupoArestas.add(linhas);
+      });
+
+      grupoArestas.visible = arestasVisiveis;
+      scene.add(grupoArestas);
+    }
+
+    window.alternarArestas = function () {
+      arestasVisiveis = !arestasVisiveis;
+      if (grupoArestas) grupoArestas.visible = arestasVisiveis;
+    };
+
+    window.alternarPiso = function () {
+      pisoVisivel = !pisoVisivel;
+      if (piso) piso.visible = pisoVisivel;
+    };
+
+    function carregarOBJ(materiais = null) {
+      const objLoader = new OBJLoader();
+
+      if (materiais) {
+        objLoader.setMaterials(materiais);
+      }
+
+      objLoader.setPath("./");
+
+      objLoader.load(
+        ARQUIVO_OBJ,
+        function (objeto) {
+          modelo = objeto;
+          prepararMateriais(modelo);
+          scene.add(modelo);
+          centralizarModelo(modelo);
+          criarArestas(modelo);
+          status.textContent = "Modelo carregado com cores";
+        },
+        function (xhr) {
+          if (xhr.lengthComputable) {
+            const p = Math.round((xhr.loaded / xhr.total) * 100);
+            status.textContent = "Carregando OBJ... " + p + "%";
+          }
+        },
+        function (erro) {
+          console.error("Erro OBJ:", erro);
+          status.textContent = "Erro ao carregar modelo.obj";
+        }
+      );
+    }
+
+    function carregarModelo() {
+      const mtlLoader = new MTLLoader();
+      mtlLoader.setPath("./");
+      mtlLoader.setTexturePath("./");
+      mtlLoader.setResourcePath("./");
+
+      mtlLoader.load(
+        ARQUIVO_MTL,
+        function (materiais) {
+          materiais.preload();
+          status.textContent = "Materiais carregados. Carregando OBJ...";
+          carregarOBJ(materiais);
+        },
+        undefined,
+        function (erro) {
+          console.warn("Erro MTL ou MTL não encontrado:", erro);
+          status.textContent = "MTL não encontrado. Carregando OBJ sem cores completas...";
+          carregarOBJ(null);
+        }
+      );
+    }
+  </script>
+</body>
+</html>
